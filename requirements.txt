@@ -1,0 +1,5 @@
+fastmcp
+google-auth
+gspread
+uvicorn
+python-dotenv

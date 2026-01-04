@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MacroLens</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+
+      body {
+        margin: 0;
+        font: inherit;
+      }
+
+      .wrap {
+        padding: 16px;
+      }
+
+      .card {
+        padding: 16px;
+        border: 1px solid;
+        border-radius: 16px;
+      }
+
+      /* Make the border subtle without hardcoding colors. */
+      @supports (color: color-mix(in srgb, currentColor 20%, transparent)) {
+        .card {
+          border-color: color-mix(in srgb, currentColor 18%, transparent);
+        }
+      }
+
+      .title {
+        font-size: 16px;
+        font-weight: 600;
+        margin: 0 0 12px 0;
+      }
+
+      .subtext {
+        margin: 0 0 16px 0;
+        line-height: 1.35;
+        opacity: 0.75;
+      }
+
+      .btn {
+        width: 100%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 16px 14px;
+        border-radius: 14px;
+        border: 1px solid;
+        font-size: 18px;
+        font-weight: 650;
+        letter-spacing: 0.2px;
+        background: transparent;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .btn:disabled {
+        cursor: not-allowed;
+        opacity: 0.6;
+      }
+
+      .status {
+        margin: 12px 0 0 0;
+        font-size: 13px;
+        line-height: 1.4;
+        opacity: 0.75;
+        word-break: break-word;
+      }
+
+      input[type="file"] {
+        display: none;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="wrap">
+      <section class="card" aria-label="MacroLens">
+        <h2 class="title">MacroLens</h2>
+        <p class="subtext">
+          Snap a photo of your meal and let ChatGPT log the macros.
+        </p>
+
+        <button id="snapBtn" class="btn" type="button">
+          <span aria-hidden="true">📸</span>
+          <span>Snap Food</span>
+        </button>
+
+        <input id="fileInput" type="file" accept="image/*" />
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+      </section>
+    </div>
+
+    <script type="module">
+      const snapBtn = document.getElementById("snapBtn");
+      const fileInput = document.getElementById("fileInput");
+      const statusEl = document.getElementById("status");
+
+      function setStatus(msg) {
+        statusEl.textContent = msg || "";
+        try {
+          window.openai?.notifyIntrinsicHeight?.({});
+        } catch {
+          // no-op
+        }
+      }
+
+      function setBusy(busy) {
+        snapBtn.disabled = !!busy;
+      }
+
+      function hasRuntime() {
+        return !!(
+          window.openai &&
+          typeof window.openai.uploadFile === "function" &&
+          typeof window.openai.sendFollowUpMessage === "function"
+        );
+      }
+
+      if (!hasRuntime()) {
+        setBusy(true);
+        setStatus(
+          "This widget needs to run inside ChatGPT (window.openai is unavailable)."
+        );
+      }
+
+      snapBtn.addEventListener("click", () => {
+        if (!hasRuntime()) return;
+        fileInput.click();
+      });
+
+      fileInput.addEventListener("change", async () => {
+        if (!hasRuntime()) return;
+
+        const file = fileInput.files?.[0];
+        // Reset immediately so selecting the same file twice still triggers change.
+        fileInput.value = "";
+
+        if (!file) return;
+
+        try {
+          setBusy(true);
+          setStatus("Uploading photo…");
+
+          const uploadResp = await window.openai.uploadFile(file);
+          const fileId =
+            uploadResp?.fileId || uploadResp?.id || uploadResp?.file_id;
+          if (!fileId) {
+            throw new Error("Upload succeeded but no fileId was returned.");
+          }
+
+          setStatus("Sending to ChatGPT…");
+
+          const prompt =
+            "I just uploaded a food photo. Analyze it and use the log_food tool.";
+
+          // The public docs show sendFollowUpMessage({ prompt }).
+          // Some runtimes also accept fileIds/attachments; we try a few shapes.
+          const attempts = [
+            { prompt, fileIds: [fileId] },
+            { prompt, attachments: [{ fileId }] },
+            { prompt, files: [{ fileId }] },
+            { prompt },
+          ];
+
+          let sent = false;
+          let lastErr = null;
+
+          for (const payload of attempts) {
+            try {
+              await window.openai.sendFollowUpMessage(payload);
+              sent = true;
+              break;
+            } catch (e) {
+              lastErr = e;
+            }
+          }
+
+          if (!sent) {
+            throw lastErr || new Error("Failed to send follow-up message.");
+          }
+
+          setStatus("Done — ChatGPT is analyzing your photo.");
+        } catch (err) {
+          setStatus(`Could not upload/send: ${err?.message || String(err)}`);
+        } finally {
+          setBusy(false);
+        }
+      });
+
+      // Initial size report.
+      try {
+        window.openai?.notifyIntrinsicHeight?.({});
+      } catch {
+        // no-op
+      }
+    </script>
+  </body>
+</html>
